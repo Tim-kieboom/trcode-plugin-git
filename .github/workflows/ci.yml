@@ -1,0 +1,22 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup target add wasm32-unknown-unknown
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets
+      - run: cargo test
+      - run: cargo build --target wasm32-unknown-unknown --release
+      # The built module, run by the editor against a real repository.
+      - name: The module in the editor
+        run: |
+          git clone --depth 1 --branch plugin-api-1.3 https://github.com/Tim-kieboom/TerminalCode ../TerminalCode
+          TRCODE_PLUGIN_GIT_DIR="$PWD" cargo test --manifest-path ../TerminalCode/Cargo.toml -p terminal_code real_plugin -- --ignored

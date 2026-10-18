@@ -1,0 +1,36 @@
+id = "git"
+name = "Git"
+version = "0.1.0"
+abi = "1.3"
+wasm = "git.wasm"
+capabilities = ["git.read", "git.write", "editor.open"]
+
+[[action]]
+id = "up"
+title = "Previous File"
+keys = "up"
+
+[[action]]
+id = "down"
+title = "Next File"
+keys = "down"
+
+[[action]]
+id = "open"
+title = "Open File"
+keys = "enter"
+
+[[action]]
+id = "stage"
+title = "Stage File"
+keys = "s"
+
+[[action]]
+id = "unstage"
+title = "Unstage File"
+keys = "u"
+
+[[action]]
+id = "refresh"
+title = "Refresh"
+keys = "r"

@@ -1,0 +1,42 @@
+name: Release
+
+# Push a tag `vX.Y.Z` (the same as `version` in manifest.toml). The release gets the
+# manifest and the module, and the summary has the entry to paste in plugins/index.json
+# of the TerminalCode repository.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup target add wasm32-unknown-unknown
+      - run: cargo test
+      - run: cargo build --target wasm32-unknown-unknown --release
+      - name: Check the tag is the manifest's version
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' manifest.toml | head -n1)
+          test "v$version" = "$GITHUB_REF_NAME" || { echo "tag $GITHUB_REF_NAME, manifest $version"; exit 1; }
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp target/wasm32-unknown-unknown/release/trcode_plugin_git.wasm git.wasm
+          gh release create "$GITHUB_REF_NAME" git.wasm manifest.toml --title "$GITHUB_REF_NAME" --notes "Git pane for TerminalCode"
+      - name: Index entry
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' manifest.toml | head -n1)
+          abi=$(sed -n 's/^abi = "\(.*\)"/\1/p' manifest.toml | head -n1)
+          sha=$(sha256sum git.wasm | cut -d' ' -f1)
+          base="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}"
+          {
+            echo '### Entry for `plugins/index.json`'
+            echo '```json'
+            echo "{ \"id\": \"git\", \"name\": \"Git\", \"description\": \"The changed files of the repository: open, stage and unstage\", \"version\": \"$version\", \"manifest\": \"$base/manifest.toml\", \"module\": \"$base/git.wasm\", \"sha256\": \"$sha\", \"abi\": \"$abi\" }"
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"

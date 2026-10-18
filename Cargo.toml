@@ -1,0 +1,16 @@
+[package]
+name = "trcode-plugin-git"
+description = "The Git pane of TerminalCode, as a plugin: the changed files, to open, stage and unstage"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+authors = ["Tim Kieboom"]
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# The plugin API of the editor, by tag of its repository; bump the tag by hand when
+# the API changes (and `abi` in manifest.toml with it).
+trcode-plugin-api = { git = "https://github.com/Tim-kieboom/TerminalCode", tag = "plugin-api-1.3" }
