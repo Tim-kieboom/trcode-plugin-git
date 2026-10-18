@@ -108,8 +108,8 @@ dependencies = [
 
 [[package]]
 name = "trcode-plugin-api"
-version = "0.6.2"
-source = "git+https://github.com/Tim-kieboom/TerminalCode?tag=plugin-api-1.3#e150f99baf4c9cee51e8e81c4ade6daede84784a"
+version = "0.7.0"
+source = "git+https://github.com/Tim-kieboom/TerminalCode?tag=plugin-api-1.4#2fbf3f9d818d12355dd0c28feee09c18f07a648a"
 dependencies = [
  "serde",
  "serde_json",
@@ -118,7 +118,7 @@ dependencies = [
 
 [[package]]
 name = "trcode-plugin-git"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "trcode-plugin-api",
 ]

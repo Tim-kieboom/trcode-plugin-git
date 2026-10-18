@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use trcode_plugin_api::{
     Capability, FromPlugin, GitEntry, GitKind, GitSection, GitSummary, Plugin, Refusal, ToPlugin,
-    WireLine, WireSpan, WireView,
+    WireButton, WireLine, WireSpan, WireView,
 };
 
 /// How many files are asked for at once.
@@ -51,6 +51,38 @@ enum Asked {
     },
     /// A change or an opening: nothing to do with the answer but tell what went wrong.
     Command,
+    /// The commit: when it is done the message is cleared.
+    Commit,
+    /// A fetch, pull or push: when it ends the buttons come back.
+    Remote,
+}
+
+/// The fetch, pull or push that is running.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Running {
+    request: u64,
+    /// What it is called while it runs: `fetching`, `pulling`, `pushing`.
+    doing: &'static str,
+}
+
+/// What the buttons need to know of the repository.
+#[derive(Debug, Default, Clone)]
+struct Facts {
+    staged: usize,
+    /// Files that are changed but not staged, untracked or in conflict.
+    unstaged: usize,
+    has_branch: bool,
+    upstream: bool,
+    ahead: u32,
+    behind: u32,
+}
+
+/// Which command to the remote.
+#[derive(Debug, Clone, Copy)]
+enum Remote {
+    Fetch,
+    Pull,
+    Push,
 }
 
 /// What a row of the last view was, for a click on it.
@@ -77,6 +109,13 @@ pub struct Viewer {
     problem: Option<String>,
     /// What the rows of the last view were.
     rows: Vec<Row>,
+    facts: Facts,
+    /// The commit message, and the character the cursor is before.
+    message: String,
+    cursor: usize,
+    /// Whether the message is being typed into: the keys are its text.
+    typing: bool,
+    running: Option<Running>,
 }
 
 impl Default for Viewer {
@@ -91,6 +130,11 @@ impl Default for Viewer {
             requests: HashMap::new(),
             problem: None,
             rows: Vec::new(),
+            facts: Facts::default(),
+            message: String::new(),
+            cursor: 0,
+            typing: false,
+            running: None,
         }
     }
 }
@@ -111,9 +155,12 @@ impl Plugin for Viewer {
             } => self.page(request, generation, offset, entries),
             ToPlugin::Action { action } => self.action(&action, &mut out),
             ToPlugin::Click { row } => self.click(row, &mut out),
-            ToPlugin::Done { request } => {
-                self.requests.remove(&request);
-            }
+            ToPlugin::Press { button } => self.press(&button, &mut out),
+            ToPlugin::InputClick { column } => self.click_in_message(column),
+            ToPlugin::Text { text } => self.type_text(&text),
+            ToPlugin::Key { key, ctrl, .. } => self.type_key(&key, ctrl, &mut out),
+            ToPlugin::InputEnded => self.typing = false,
+            ToPlugin::Done { request } => self.done(request),
             ToPlugin::Refused { request, reason } => self.refused(request, &reason),
             _ => {}
         }
@@ -149,9 +196,18 @@ impl Viewer {
         self.requests
             .retain(|_, asked| !matches!(asked, Asked::Page { .. }));
         self.selected = self.selected.min(self.total().saturating_sub(1));
+        self.facts = Facts {
+            staged: summary.staged,
+            unstaged: summary.changes + summary.untracked + summary.conflicts,
+            has_branch: summary.branch.is_some(),
+            upstream: summary.upstream.is_some(),
+            ahead: summary.ahead,
+            behind: summary.behind,
+        };
     }
 
     fn unavailable(&mut self) {
+        self.facts = Facts::default();
         self.repository = Some(false);
         self.groups = Default::default();
         self.requests.clear();
@@ -171,16 +227,37 @@ impl Viewer {
         self.groups[group].pages.insert(page, entries);
     }
 
+    fn done(&mut self, request: u64) {
+        match self.requests.remove(&request) {
+            Some(Asked::Commit) => {
+                self.message.clear();
+                self.cursor = 0;
+                self.typing = false;
+            }
+            Some(Asked::Remote) => self.running = None,
+            _ => {}
+        }
+    }
+
     fn refused(&mut self, request: u64, reason: &Refusal) {
         // A page that was refused stays marked as asked, so it is not asked for again
         // and again: the next summary (or a refresh) starts over.
-        self.requests.remove(&request);
+        let asked = self.requests.remove(&request);
+        if matches!(asked, Some(Asked::Remote)) {
+            self.running = None;
+        }
         self.problem = Some(match reason {
             Refusal::Denied { capability } => {
                 format!("not allowed: {}", capability_name(*capability))
             }
             Refusal::NoRepository => "no git repository".to_owned(),
             Refusal::BadArgument { detail } | Refusal::Failed { detail } => detail.clone(),
+            Refusal::NothingStaged => "nothing is staged: stage a file first".to_owned(),
+            Refusal::Busy => "another command is running".to_owned(),
+            Refusal::Cancelled => "stopped".to_owned(),
+            Refusal::AuthRequired { .. } => {
+                "needs a password or key: authenticate once in the terminal pane".to_owned()
+            }
             _ => "the editor said no".to_owned(),
         });
     }
@@ -193,6 +270,12 @@ impl Viewer {
             "open" => self.open_selected(out),
             "stage" => self.change_selected(out, true),
             "unstage" => self.change_selected(out, false),
+            "stage_all" => self.stage_all(out),
+            "unstage_all" => self.unstage_all(out),
+            "commit" => self.start_commit(),
+            "fetch" => self.remote(out, Remote::Fetch),
+            "pull" => self.remote(out, Remote::Pull),
+            "push" => self.remote(out, Remote::Push),
             "refresh" => {
                 for group in &mut self.groups {
                     group.pages.clear();
@@ -203,6 +286,155 @@ impl Viewer {
             }
             _ => {}
         }
+    }
+
+    /// A button was pressed: the same as the action of that name, except that the
+    /// commit button commits when there is a message and asks for one when not.
+    fn press(&mut self, button: &str, out: &mut Vec<FromPlugin>) {
+        self.problem = None;
+        match button {
+            "commit" => self.commit_or_ask(out),
+            "stage_all" => self.stage_all(out),
+            "unstage_all" => self.unstage_all(out),
+            "fetch" => self.remote(out, Remote::Fetch),
+            "pull" => self.remote(out, Remote::Pull),
+            "push" => self.remote(out, Remote::Push),
+            "cancel" => self.cancel(out),
+            _ => {}
+        }
+    }
+
+    fn stage_all(&mut self, out: &mut Vec<FromPlugin>) {
+        if self.facts.unstaged == 0 {
+            self.problem = Some("nothing to stage".to_owned());
+            return;
+        }
+        let request = self.send(Asked::Command);
+        out.push(FromPlugin::GitStageAll { request });
+    }
+
+    fn unstage_all(&mut self, out: &mut Vec<FromPlugin>) {
+        if self.facts.staged == 0 {
+            self.problem = Some("nothing is staged".to_owned());
+            return;
+        }
+        let request = self.send(Asked::Command);
+        out.push(FromPlugin::GitUnstageAll { request });
+    }
+
+    /// The `commit` action: moves to the message to type it.
+    fn start_commit(&mut self) {
+        self.typing = true;
+        self.cursor = self.message.chars().count();
+    }
+
+    /// Commits with what was typed; with nothing typed it moves to the message.
+    fn commit_or_ask(&mut self, out: &mut Vec<FromPlugin>) {
+        if self.message.trim().is_empty() {
+            self.problem = Some("type a commit message first".to_owned());
+            self.start_commit();
+            return;
+        }
+        if self.facts.staged == 0 {
+            self.problem = Some("nothing is staged: stage a file first".to_owned());
+            return;
+        }
+        let request = self.send(Asked::Commit);
+        out.push(FromPlugin::GitCommit {
+            request,
+            message: self.message.clone(),
+        });
+    }
+
+    fn remote(&mut self, out: &mut Vec<FromPlugin>, which: Remote) {
+        if self.running.is_some() {
+            self.problem = Some("another command is running".to_owned());
+            return;
+        }
+        let request = self.send(Asked::Remote);
+        let doing = match which {
+            Remote::Fetch => {
+                out.push(FromPlugin::GitFetch { request });
+                "fetching"
+            }
+            Remote::Pull => {
+                out.push(FromPlugin::GitPull { request });
+                "pulling"
+            }
+            Remote::Push => {
+                out.push(FromPlugin::GitPush { request });
+                "pushing"
+            }
+        };
+        self.running = Some(Running { request, doing });
+    }
+
+    fn cancel(&mut self, out: &mut Vec<FromPlugin>) {
+        if self.running.is_none() {
+            return;
+        }
+        let request = self.send(Asked::Command);
+        out.push(FromPlugin::GitCancel { request });
+    }
+
+    /// A click in the message: it is typed into from the character clicked.
+    fn click_in_message(&mut self, column: usize) {
+        self.typing = true;
+        self.cursor = column.min(self.message.chars().count());
+    }
+
+    fn type_text(&mut self, text: &str) {
+        if !self.typing {
+            return;
+        }
+        // One line: a pasted line break is a space.
+        let text: String = text
+            .chars()
+            .map(|c| if c == '\n' || c == '\r' { ' ' } else { c })
+            .collect();
+        let at = self.byte_of(self.cursor);
+        self.message.insert_str(at, &text);
+        self.cursor += text.chars().count();
+    }
+
+    fn type_key(&mut self, key: &str, ctrl: bool, out: &mut Vec<FromPlugin>) {
+        if !self.typing {
+            return;
+        }
+        let length = self.message.chars().count();
+        match (key, ctrl) {
+            ("backspace", _) if self.cursor > 0 => {
+                self.cursor -= 1;
+                let at = self.byte_of(self.cursor);
+                self.message.remove(at);
+            }
+            ("delete", _) if self.cursor < length => {
+                let at = self.byte_of(self.cursor);
+                self.message.remove(at);
+            }
+            ("left", _) => self.cursor = self.cursor.saturating_sub(1),
+            ("right", _) => self.cursor = (self.cursor + 1).min(length),
+            ("home", _) | ("a", true) => self.cursor = 0,
+            ("end", _) | ("e", true) => self.cursor = length,
+            // Clears the line.
+            ("u", true) => {
+                self.message.clear();
+                self.cursor = 0;
+            }
+            ("enter", _) => {
+                self.problem = None;
+                self.commit_or_ask(out);
+            }
+            _ => {}
+        }
+    }
+
+    /// Where character `index` starts in the message.
+    fn byte_of(&self, index: usize) -> usize {
+        self.message
+            .char_indices()
+            .nth(index)
+            .map_or(self.message.len(), |(at, _)| at)
     }
 
     fn click(&mut self, row: usize, out: &mut Vec<FromPlugin>) {
@@ -356,8 +588,46 @@ impl Viewer {
         Some(before + 1 + row)
     }
 
-    /// What the pane shows now, and what each of its rows is.
+    /// What the pane shows now: the buttons, the files, the message.
     fn view(&mut self) -> WireView {
+        let rows = self.rows_view();
+        WireView::column([self.buttons(), rows, self.message_line()])
+    }
+
+    /// The buttons: only what can be done now can be pressed. While a command runs
+    /// the others wait and the one that can be done is the stop.
+    fn buttons(&self) -> WireView {
+        let facts = &self.facts;
+        let repository = self.repository == Some(true);
+        let idle = repository && self.running.is_none();
+        let count = |label: &str, n: u32| match n {
+            0 => label.to_owned(),
+            n => format!("{label} ({n})"),
+        };
+        let mut buttons = vec![
+            WireButton::new("commit", "Commit").enabled(idle && facts.staged > 0),
+            WireButton::new("stage_all", "Stage All").enabled(repository && facts.unstaged > 0),
+            WireButton::new("unstage_all", "Unstage All").enabled(repository && facts.staged > 0),
+            WireButton::new("fetch", "Fetch").enabled(idle),
+            WireButton::new("pull", count("Pull", facts.behind)).enabled(idle && facts.upstream),
+            WireButton::new("push", count("Push", facts.ahead))
+                .enabled(idle && facts.has_branch && (facts.ahead > 0 || !facts.upstream)),
+        ];
+        if self.running.is_some() {
+            buttons.push(WireButton::new("cancel", "Cancel"));
+        }
+        WireView::buttons(buttons)
+    }
+
+    fn message_line(&self) -> WireView {
+        match self.typing {
+            true => WireView::input("Message: ", &self.message, self.cursor),
+            false => WireView::idle_input("Message: ", &self.message, self.cursor),
+        }
+    }
+
+    /// What the files show now, and what each of its rows is.
+    fn rows_view(&mut self) -> WireView {
         let mut rows = Vec::new();
         let mut lines = Vec::new();
         let mut selected = None;
@@ -365,7 +635,11 @@ impl Viewer {
             None => lines.push(plain("…", HINT_SLOT)),
             Some(false) => lines.push(plain("No git repository", HINT_SLOT)),
             Some(true) => {
-                lines.push(plain(&self.heading, BRANCH_SLOT));
+                let heading = match self.running {
+                    Some(running) => format!("{} · {}…", self.heading, running.doing),
+                    None => self.heading.clone(),
+                };
+                lines.push(plain(&heading, BRANCH_SLOT));
                 rows.push(Row::Branch);
                 if self.total() == 0 {
                     lines.push(plain("No changes", HINT_SLOT));
