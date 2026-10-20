@@ -75,6 +75,12 @@ the editor against a real repository, is tested from the editor's repository wit
 `TRCODE_PLUGIN_GIT_DIR=/path/to/this/repo cargo test -p terminal_code real_plugin -- --ignored`
 (CI does it).
 
+## Description
+
+`description.md` is what "Plugins: Manage" shows when you press `d` on the plugin. It is
+published next to `manifest.toml` and installed with the plugin, so it can be read offline.
+(Versions before 0.2.1 have none; the manager shows their README instead.)
+
 ## Releasing
 
 Set `version` in `manifest.toml`, tag `vX.Y.Z` and push the tag. The release workflow builds

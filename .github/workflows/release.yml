@@ -27,7 +27,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           cp target/wasm32-unknown-unknown/release/trcode_plugin_git.wasm git.wasm
-          gh release create "$GITHUB_REF_NAME" git.wasm manifest.toml --title "$GITHUB_REF_NAME" --notes "Git pane for TerminalCode"
+          gh release create "$GITHUB_REF_NAME" git.wasm manifest.toml description.md --title "$GITHUB_REF_NAME" --notes "Git pane for TerminalCode"
       - name: Index entry
         run: |
           version=$(sed -n 's/^version = "\(.*\)"/\1/p' manifest.toml | head -n1)
