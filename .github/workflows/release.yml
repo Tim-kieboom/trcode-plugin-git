@@ -1,8 +1,8 @@
 name: Release
 
 # Push a tag `vX.Y.Z` (the same as `version` in manifest.toml). The release gets the
-# manifest and the module, and the summary has the entry to paste in plugins/index.json
-# of the TerminalCode repository.
+# manifest and the module, and the summary has the entry to paste in index.json of
+# https://github.com/Tim-kieboom/trcode-plugins.
 on:
   push:
     tags: ["v*"]
@@ -35,7 +35,7 @@ jobs:
           sha=$(sha256sum git.wasm | cut -d' ' -f1)
           base="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}"
           {
-            echo '### Entry for `plugins/index.json`'
+            echo '### Entry for `index.json` of trcode-plugins'
             echo '```json'
             echo "{ \"id\": \"git\", \"name\": \"Git\", \"description\": \"The changed files of the repository: open, stage and unstage\", \"version\": \"$version\", \"manifest\": \"$base/manifest.toml\", \"module\": \"$base/git.wasm\", \"sha256\": \"$sha\", \"abi\": \"$abi\" }"
             echo '```'

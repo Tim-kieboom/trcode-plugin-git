@@ -79,4 +79,4 @@ the editor against a real repository, is tested from the editor's repository wit
 
 Set `version` in `manifest.toml`, tag `vX.Y.Z` and push the tag. The release workflow builds
 the module, attaches it and the manifest to a release, and prints the entry to paste into
-`plugins/index.json` of the editor's repository (in the run's summary).
+`index.json` of [trcode-plugins](https://github.com/Tim-kieboom/trcode-plugins) (in the run's summary).
