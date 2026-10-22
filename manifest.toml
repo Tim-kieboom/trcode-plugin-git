@@ -51,6 +51,11 @@ title = "Commit"
 keys = "c"
 
 [[action]]
+id = "more"
+title = "More Buttons"
+keys = "m"
+
+[[action]]
 id = "fetch"
 title = "Fetch"
 keys = "f"

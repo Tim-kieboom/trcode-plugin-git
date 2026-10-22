@@ -25,10 +25,13 @@ cp target/wasm32-unknown-unknown/release/trcode_plugin_git.wasm "$dir/git.wasm"
 ## What it shows
 
 A row of buttons (they wrap onto more lines in a narrow pane), the branch and the
-changed files in groups, and a line for the commit message:
+changed files in groups, and a line for the commit message. Commit, Push and **More** are
+always there; More opens a second row with Fetch, Pull, Stage All and Unstage All, and
+choosing one of them does it and closes the row (so does a click on a file):
 
 | Button | Does | Key |
 | --- | --- | --- |
+| More (`v`/`^`) | opens and closes the row with Fetch, Pull, Stage All and Unstage All | `m` |
 | Commit | commits what is staged with the message under it; with no message it takes you to the line to type it | `c` types the message, `enter` in it commits |
 | Stage All | stages every change, new files too | `a` |
 | Unstage All | takes everything out of the staged changes | `shift+a` |

@@ -116,6 +116,8 @@ pub struct Viewer {
     /// Whether the message is being typed into: the keys are its text.
     typing: bool,
     running: Option<Running>,
+    /// Whether the list under the More button is open.
+    more_open: bool,
 }
 
 impl Default for Viewer {
@@ -135,6 +137,7 @@ impl Default for Viewer {
             cursor: 0,
             typing: false,
             running: None,
+            more_open: false,
         }
     }
 }
@@ -273,6 +276,7 @@ impl Viewer {
             "stage_all" => self.stage_all(out),
             "unstage_all" => self.unstage_all(out),
             "commit" => self.start_commit(),
+            "more" => self.more_open = !self.more_open,
             "fetch" => self.remote(out, Remote::Fetch),
             "pull" => self.remote(out, Remote::Pull),
             "push" => self.remote(out, Remote::Push),
@@ -293,6 +297,7 @@ impl Viewer {
     fn press(&mut self, button: &str, out: &mut Vec<FromPlugin>) {
         self.problem = None;
         match button {
+            "more" => self.more_open = !self.more_open,
             "commit" => self.commit_or_ask(out),
             "stage_all" => self.stage_all(out),
             "unstage_all" => self.unstage_all(out),
@@ -301,6 +306,10 @@ impl Viewer {
             "push" => self.remote(out, Remote::Push),
             "cancel" => self.cancel(out),
             _ => {}
+        }
+        // What the list offered is done: it closes.
+        if matches!(button, "stage_all" | "unstage_all" | "fetch" | "pull") {
+            self.more_open = false;
         }
     }
 
@@ -438,6 +447,7 @@ impl Viewer {
     }
 
     fn click(&mut self, row: usize, out: &mut Vec<FromPlugin>) {
+        self.more_open = false;
         if let Some(Row::File(file)) = self.rows.get(row).copied() {
             self.selected = file;
             self.problem = None;
@@ -591,11 +601,18 @@ impl Viewer {
     /// What the pane shows now: the buttons, the files, the message.
     fn view(&mut self) -> WireView {
         let rows = self.rows_view();
-        WireView::column([self.buttons(), rows, self.message_line()])
+        let mut parts = vec![self.buttons()];
+        if self.more_open {
+            parts.push(self.more_buttons());
+        }
+        parts.push(rows);
+        parts.push(self.message_line());
+        WireView::column(parts)
     }
 
-    /// The buttons: only what can be done now can be pressed. While a command runs
-    /// the others wait and the one that can be done is the stop.
+    /// The buttons: only what can be done now can be pressed. Commit and Push are the ones
+    /// that are always there, with More, which opens the rest (fetch, pull, stage all and unstage
+    /// all). While a command runs the others wait and the one that can be done is the stop.
     fn buttons(&self) -> WireView {
         let facts = &self.facts;
         let repository = self.repository == Some(true);
@@ -604,19 +621,35 @@ impl Viewer {
             0 => label.to_owned(),
             n => format!("{label} ({n})"),
         };
+        let arrow = if self.more_open { "^" } else { "v" };
         let mut buttons = vec![
             WireButton::new("commit", "Commit").enabled(idle && facts.staged > 0),
-            WireButton::new("stage_all", "Stage All").enabled(repository && facts.unstaged > 0),
-            WireButton::new("unstage_all", "Unstage All").enabled(repository && facts.staged > 0),
-            WireButton::new("fetch", "Fetch").enabled(idle),
-            WireButton::new("pull", count("Pull", facts.behind)).enabled(idle && facts.upstream),
             WireButton::new("push", count("Push", facts.ahead))
                 .enabled(idle && facts.has_branch && (facts.ahead > 0 || !facts.upstream)),
+            WireButton::new("more", format!("More {arrow}")).enabled(repository),
         ];
         if self.running.is_some() {
             buttons.push(WireButton::new("cancel", "Cancel"));
         }
         WireView::buttons(buttons)
+    }
+
+    /// What More opens: fetch and pull, which wait for a command that runs, and stage all and
+    /// unstage all, which do not touch the remote.
+    fn more_buttons(&self) -> WireView {
+        let facts = &self.facts;
+        let repository = self.repository == Some(true);
+        let idle = repository && self.running.is_none();
+        let count = |label: &str, n: u32| match n {
+            0 => label.to_owned(),
+            n => format!("{label} ({n})"),
+        };
+        WireView::buttons(vec![
+            WireButton::new("fetch", "Fetch").enabled(idle),
+            WireButton::new("pull", count("Pull", facts.behind)).enabled(idle && facts.upstream),
+            WireButton::new("stage_all", "Stage All").enabled(repository && facts.unstaged > 0),
+            WireButton::new("unstage_all", "Unstage All").enabled(repository && facts.staged > 0),
+        ])
     }
 
     fn message_line(&self) -> WireView {

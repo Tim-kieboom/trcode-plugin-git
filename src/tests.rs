@@ -13,6 +13,10 @@ struct Pane {
     said: Vec<FromPlugin>,
     rows: Vec<String>,
     selected: Option<usize>,
+    /// The buttons that are shown, row by row: always the first row, and the list More opens
+    /// when it is open.
+    button_rows: Vec<Vec<WireButton>>,
+    /// The same, in one list.
     buttons: Vec<WireButton>,
     /// The line to type into: its prompt, text, cursor and whether it is active.
     message: (String, String, usize, bool),
@@ -25,6 +29,7 @@ impl Pane {
             said: Vec::new(),
             rows: Vec::new(),
             selected: None,
+            button_rows: Vec::new(),
             buttons: Vec::new(),
             message: Default::default(),
         };
@@ -46,13 +51,22 @@ impl Pane {
         let WireView::Column { parts } = view else {
             panic!("a column of buttons, rows and the message");
         };
-        let [buttons, rows, message] = &parts[..] else {
-            panic!("three parts");
+        let Some((message, rest)) = parts.split_last() else {
+            panic!("a column");
         };
-        let (WireView::Buttons { buttons }, WireView::Rows { lines, selected }) = (buttons, rows)
-        else {
-            panic!("buttons and rows");
+        let Some((rows, button_parts)) = rest.split_last() else {
+            panic!("a column");
         };
+        let WireView::Rows { lines, selected } = rows else {
+            panic!("rows");
+        };
+        let button_rows: Vec<Vec<WireButton>> = button_parts
+            .iter()
+            .map(|part| match part {
+                WireView::Buttons { buttons } => buttons.clone(),
+                other => panic!("buttons: {other:?}"),
+            })
+            .collect();
         let WireView::Input {
             prompt,
             value,
@@ -62,7 +76,8 @@ impl Pane {
         else {
             panic!("the message is a line to type into");
         };
-        self.buttons = buttons.clone();
+        self.buttons = button_rows.iter().flatten().cloned().collect();
+        self.button_rows = button_rows;
         self.message = (prompt.clone(), value.clone(), *cursor, *active);
         let (lines, selected) = (lines.clone(), *selected);
         self.rows = lines
@@ -789,6 +804,13 @@ impl Pane {
         self.hear(ToPlugin::Press { button: id.into() });
     }
 
+    /// Opens the list under More, whose buttons are not shown until then.
+    fn open_more(&mut self) {
+        if !self.has_button("fetch") {
+            self.press("more");
+        }
+    }
+
     fn text(&mut self, text: &str) {
         self.hear(ToPlugin::text(text));
     }
@@ -841,30 +863,90 @@ fn pane_with(summary: GitSummary) -> Pane {
 }
 
 #[test]
-fn the_buttons_are_in_the_order_of_the_layout_and_the_message_is_a_line_under_them() {
-    let pane = pane_with(summary_of(1, 1, 1, Some("origin/main"), 0, 0));
+fn commit_and_push_are_always_there_with_a_more_button_that_opens_the_rest() {
+    let mut pane = pane_with(summary_of(1, 1, 1, Some("origin/main"), 0, 0));
 
-    let ids: Vec<&str> = pane.buttons.iter().map(|b| b.id.as_str()).collect();
+    let ids = |pane: &Pane| -> Vec<Vec<String>> {
+        pane.button_rows
+            .iter()
+            .map(|row| row.iter().map(|b| b.id.clone()).collect())
+            .collect()
+    };
+    assert_eq!(ids(&pane), [["commit", "push", "more"]]);
+    assert_eq!(pane.button("more").label, "More v");
+
+    pane.press("more");
 
     assert_eq!(
-        ids,
+        ids(&pane),
         [
-            "commit",
-            "stage_all",
-            "unstage_all",
-            "fetch",
-            "pull",
-            "push"
+            vec!["commit", "push", "more"],
+            vec!["fetch", "pull", "stage_all", "unstage_all"]
         ]
     );
+    assert_eq!(pane.button("more").label, "More ^");
     assert_eq!(pane.message.0, "Message: ");
     assert!(!pane.typing(), "it is not typed into until asked");
 }
 
 #[test]
+fn more_opens_and_closes_its_list_and_a_choice_in_it_does_its_job_and_closes_it() {
+    let mut pane = pane_with(summary_of(1, 1, 1, Some("origin/main"), 0, 0));
+    pane.press("more");
+    pane.press("more");
+    assert!(!pane.has_button("fetch"), "closed again");
+
+    for (id, check) in [
+        (
+            "fetch",
+            (|m: &FromPlugin| matches!(m, FromPlugin::GitFetch { .. })) as fn(&FromPlugin) -> bool,
+        ),
+        ("pull", |m| matches!(m, FromPlugin::GitPull { .. })),
+        ("stage_all", |m| matches!(m, FromPlugin::GitStageAll { .. })),
+        ("unstage_all", |m| {
+            matches!(m, FromPlugin::GitUnstageAll { .. })
+        }),
+    ] {
+        let mut pane = pane_with(summary_of(1, 1, 1, Some("origin/main"), 0, 0));
+        pane.press("more");
+        assert!(pane.has_button(id));
+
+        pane.press(id);
+
+        assert_eq!(pane.sent().len(), 1, "{id}");
+        assert!(check(pane.sent()[0]), "{id}");
+        assert!(!pane.has_button(id), "{id}: the list closed");
+    }
+}
+
+#[test]
+fn commit_and_push_do_not_close_the_list_and_a_click_on_a_file_does() {
+    let mut pane = with_changes(&["a.rs", "b.rs"]);
+    pane.press("more");
+
+    pane.press("push");
+    assert!(
+        pane.has_button("fetch"),
+        "only what the list offers closes it"
+    );
+    pane.hear(ToPlugin::Click { row: 2 });
+
+    assert!(!pane.has_button("fetch"), "a click on the files closes it");
+}
+
+#[test]
+fn more_cannot_be_pressed_without_a_repository() {
+    let mut pane = Pane::new();
+    pane.hear(ToPlugin::GitUnavailable);
+
+    assert!(!pane.button("more").enabled);
+}
+
+#[test]
 fn only_what_can_be_done_can_be_pressed() {
     // Nothing changed and nothing to push: only fetch and pull.
-    let pane = pane_with(summary_of(1, 0, 0, Some("origin/main"), 0, 0));
+    let mut pane = pane_with(summary_of(1, 0, 0, Some("origin/main"), 0, 0));
+    pane.open_more();
     for (id, enabled) in [
         ("commit", false),
         ("stage_all", false),
@@ -877,7 +959,8 @@ fn only_what_can_be_done_can_be_pressed() {
     }
 
     // Something staged and something not, and a commit to push.
-    let pane = pane_with(summary_of(1, 2, 3, Some("origin/main"), 1, 0));
+    let mut pane = pane_with(summary_of(1, 2, 3, Some("origin/main"), 1, 0));
+    pane.open_more();
     for id in [
         "commit",
         "stage_all",
@@ -892,7 +975,8 @@ fn only_what_can_be_done_can_be_pressed() {
 
 #[test]
 fn a_branch_with_no_upstream_can_be_pushed_but_not_pulled() {
-    let pane = pane_with(summary_of(1, 0, 0, None, 0, 0));
+    let mut pane = pane_with(summary_of(1, 0, 0, None, 0, 0));
+    pane.open_more();
 
     assert!(
         pane.button("push").enabled,
@@ -912,11 +996,13 @@ fn a_detached_head_cannot_be_pushed() {
 
 #[test]
 fn how_far_the_branch_is_from_its_upstream_is_on_the_buttons() {
-    let pane = pane_with(summary_of(1, 0, 0, Some("origin/main"), 2, 3));
+    let mut pane = pane_with(summary_of(1, 0, 0, Some("origin/main"), 2, 3));
+    pane.open_more();
 
     assert_eq!(pane.button("pull").label, "Pull (3)");
     assert_eq!(pane.button("push").label, "Push (2)");
-    let level = pane_with(summary_of(1, 0, 0, Some("origin/main"), 0, 0));
+    let mut level = pane_with(summary_of(1, 0, 0, Some("origin/main"), 0, 0));
+    level.open_more();
     assert_eq!(level.button("pull").label, "Pull");
     assert_eq!(level.button("push").label, "Push");
 }
@@ -1219,6 +1305,7 @@ fn while_a_command_runs_it_is_named_the_others_wait_and_a_stop_appears() {
     let mut pane = pane_with(summary_of(1, 1, 1, Some("origin/main"), 1, 1));
 
     pane.press("push");
+    pane.open_more();
 
     assert!(pane.rows[0].contains("pushing…"), "{:?}", pane.rows);
     for id in ["commit", "fetch", "pull", "push"] {
@@ -1255,6 +1342,7 @@ fn when_the_command_is_done_the_buttons_come_back() {
     pane.hear(ToPlugin::Done { request });
 
     assert!(!pane.has_button("cancel"));
+    pane.open_more();
     assert!(pane.button("pull").enabled);
     assert!(!pane.rows[0].contains("pulling"));
 }
@@ -1310,13 +1398,15 @@ fn a_command_that_was_stopped_or_failed_brings_the_buttons_back_and_says_so() {
 
         pane.hear(ToPlugin::Refused { request, reason });
 
-        assert!(pane.button("pull").enabled, "{said}");
         assert!(!pane.has_button("cancel"), "{said}");
         assert!(
             pane.rows.last().unwrap().contains(said),
             "{said}: {:?}",
             pane.rows
         );
+        // Pressing something (the list too) takes what was said away.
+        pane.open_more();
+        assert!(pane.button("pull").enabled, "{said}");
     }
 }
 
@@ -1357,4 +1447,14 @@ fn every_answer_still_ends_with_a_view_of_three_parts() {
             })
         ));
     }
+}
+
+#[test]
+fn the_more_action_opens_and_closes_the_list_like_the_button() {
+    let mut pane = pane_with(summary_of(1, 1, 1, Some("origin/main"), 0, 0));
+
+    pane.act("more");
+    assert!(pane.has_button("fetch"));
+    pane.act("more");
+    assert!(!pane.has_button("fetch"));
 }
