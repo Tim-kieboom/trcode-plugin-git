@@ -1458,3 +1458,212 @@ fn the_more_action_opens_and_closes_the_list_like_the_button() {
     pane.act("more");
     assert!(!pane.has_button("fetch"));
 }
+
+// --- the menu of a right click ---
+
+impl Pane {
+    /// Right-clicks a row of the last view; the items of the menu the pane answered with, as
+    /// the ids of actions (a rule is `-`).
+    fn right_click(&mut self, row: usize) -> Vec<String> {
+        self.hear(ToPlugin::ContextClick { row });
+        let menus: Vec<&Vec<trcode_plugin_api::WireMenuItem>> = self
+            .said
+            .iter()
+            .filter_map(|message| match message {
+                FromPlugin::Menu { items } => Some(items),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(menus.len(), 1, "one menu for one right click");
+        menus[0]
+            .iter()
+            .map(|item| match item {
+                trcode_plugin_api::WireMenuItem::Action { action } => action.clone(),
+                trcode_plugin_api::WireMenuItem::Separator => "-".to_owned(),
+                other => panic!("{other:?}"),
+            })
+            .collect()
+    }
+
+    /// The row of the view that shows `text`.
+    fn row_of(&self, text: &str) -> usize {
+        self.rows
+            .iter()
+            .position(|row| row.contains(text))
+            .unwrap_or_else(|| panic!("no row {text}: {:?}", self.rows))
+    }
+}
+
+/// Two staged files and two changed ones, all of which have come.
+fn staged_and_changed() -> Pane {
+    let mut pane = Pane::new();
+    pane.changed(summary(1, 2, 2, 0));
+    // Both pages are asked for by the summary, and what was asked is only known right after it.
+    let asked = pane.pages_asked();
+    for (section, names) in [
+        (GitSection::Staged, ["s1.rs", "s2.rs"]),
+        (GitSection::Changes, ["c1.rs", "c2.rs"]),
+    ] {
+        let request = asked
+            .iter()
+            .find(|(asked, ..)| *asked == section)
+            .map(|(.., request)| *request)
+            .expect("the page was asked for");
+        let entries = names.iter().map(|name| modified(name)).collect();
+        pane.answer(request, 1, section, 0, 2, entries);
+    }
+    pane
+}
+
+#[test]
+fn a_right_click_on_a_changed_file_offers_to_open_and_stage_it_and_selects_it() {
+    let mut pane = staged_and_changed();
+    let row = pane.row_of("c2.rs");
+
+    let items = pane.right_click(row);
+
+    assert_eq!(items, ["open", "-", "stage"]);
+    assert_eq!(
+        selected_path(&pane),
+        "M c2.rs",
+        "the file clicked is the selected one"
+    );
+    // And what is chosen works on it: the editor runs the action `stage`.
+    pane.act("stage");
+    assert!(matches!(
+        pane.commands()[..],
+        [FromPlugin::GitStage { path, .. }] if path == "c2.rs"
+    ));
+}
+
+#[test]
+fn a_right_click_on_a_staged_file_offers_to_unstage_it() {
+    let mut pane = staged_and_changed();
+    let row = pane.row_of("s2.rs");
+
+    let items = pane.right_click(row);
+
+    assert_eq!(items, ["open", "-", "unstage"]);
+    pane.act("unstage");
+    assert!(matches!(
+        pane.commands()[..],
+        [FromPlugin::GitUnstage { path, .. }] if path == "s2.rs"
+    ));
+}
+
+#[test]
+fn an_untracked_and_a_conflicted_file_are_staged_from_the_menu_too() {
+    let mut pane = Pane::new();
+    pane.changed(summary(1, 0, 0, 1));
+    let request = pane.pages_asked()[0].2;
+    pane.answer(
+        request,
+        1,
+        GitSection::Untracked,
+        0,
+        1,
+        vec![GitEntry::new("new.rs", GitKind::Untracked)],
+    );
+    let row = pane.row_of("new.rs");
+
+    assert_eq!(pane.right_click(row), ["open", "-", "stage"]);
+}
+
+#[test]
+fn a_deleted_file_cannot_be_opened_so_the_menu_only_stages_it() {
+    let mut pane = Pane::new();
+    pane.changed(summary(1, 0, 1, 0));
+    let request = pane.pages_asked()[0].2;
+    pane.answer(
+        request,
+        1,
+        GitSection::Changes,
+        0,
+        1,
+        vec![GitEntry::new("gone.rs", GitKind::Deleted)],
+    );
+    let row = pane.row_of("gone.rs");
+
+    assert_eq!(pane.right_click(row), ["stage"]);
+}
+
+#[test]
+fn a_right_click_on_a_heading_offers_what_can_be_done_with_the_group() {
+    let mut pane = staged_and_changed();
+
+    let staged = pane.row_of("Staged Changes");
+    assert_eq!(pane.right_click(staged), ["unstage_all"]);
+    let changes = pane
+        .rows
+        .iter()
+        .position(|row| row == "Changes (2)")
+        .unwrap();
+    assert_eq!(pane.right_click(changes), ["stage_all"]);
+}
+
+#[test]
+fn a_right_click_on_the_branch_offers_the_commands_to_the_remote() {
+    let mut pane = staged_and_changed();
+
+    assert_eq!(
+        pane.right_click(0),
+        ["fetch", "pull", "push", "-", "refresh"]
+    );
+}
+
+#[test]
+fn a_right_click_elsewhere_offers_a_refresh() {
+    let mut pane = with_changes(&["a.rs"]);
+    pane.hear(ToPlugin::Press {
+        button: "stage_all".into(),
+    });
+    let last = pane.rows.len() - 1;
+
+    assert_eq!(pane.right_click(last + 5), ["refresh"], "past the rows");
+    let mut none = Pane::new();
+    assert_eq!(none.right_click(0), ["refresh"], "before anything is known");
+}
+
+#[test]
+fn a_file_whose_page_has_not_come_has_nothing_to_offer_but_a_refresh() {
+    let mut pane = Pane::new();
+    pane.changed(summary(1, 0, 3, 0));
+    // The rows say `…` for the files that are on their way.
+    let row = pane.rows.iter().position(|row| row.contains('…')).unwrap();
+
+    assert_eq!(pane.right_click(row), ["refresh"]);
+}
+
+#[test]
+fn a_right_click_closes_the_list_under_more_and_clears_what_was_said() {
+    let mut pane = with_changes(&["a.rs"]);
+    pane.press("more");
+    assert!(pane.has_button("fetch"));
+
+    pane.right_click(2);
+
+    assert!(!pane.has_button("fetch"));
+}
+
+#[test]
+fn every_action_a_menu_offers_is_one_the_manifest_has_with_a_title() {
+    let manifest = include_str!("../manifest.toml");
+    let declared: Vec<String> = manifest
+        .lines()
+        .filter_map(|line| line.strip_prefix("id = \""))
+        .filter_map(|rest| rest.strip_suffix('"'))
+        .map(str::to_owned)
+        .collect();
+    let mut pane = staged_and_changed();
+    let mut offered = Vec::new();
+    for row in 0..pane.rows.len() {
+        offered.extend(pane.right_click(row));
+    }
+
+    for action in offered.iter().filter(|action| *action != "-") {
+        assert!(
+            declared.contains(action),
+            "{action} is not an action of the manifest"
+        );
+    }
+}

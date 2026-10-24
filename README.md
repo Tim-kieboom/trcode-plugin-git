@@ -40,6 +40,8 @@ choosing one of them does it and closes the row (so does a click on a file):
 | Push (n) | pushes the branch; a branch with no upstream is pushed with `-u` when the repository has one remote. `n` is how many commits you are ahead | `shift+p` |
 | Cancel | stops the fetch, pull or push that is running (also `esc`) | `esc` |
 
+A **right click** on a row opens a menu, like the editor's: on a file, Open File and Stage File (Unstage File for a staged one; both show their keys), on a heading Stage All or Unstage All, on the branch Fetch, Pull and Push. The file you clicked is the selected one, so the keys `s` and `u` then work on it. This needs plugin API 1.10, so an editor that is older stays with version 0.2.2 of this plugin.
+
 Only what can be done now can be pressed: Commit needs something staged, Pull an
 upstream, Push a commit to push (or a branch with no upstream yet). A fetch, pull or
 push runs one at a time and the branch row says what it is doing (`main · pushing…`).

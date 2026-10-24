@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use trcode_plugin_api::{
     Capability, FromPlugin, GitEntry, GitKind, GitSection, GitSummary, Plugin, Refusal, ToPlugin,
-    WireButton, WireLine, WireSpan, WireView,
+    WireButton, WireLine, WireMenuItem, WireSpan, WireView,
 };
 
 /// How many files are asked for at once.
@@ -89,9 +89,32 @@ enum Remote {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Row {
     Branch,
-    Header,
+    /// The heading of a group, by the place of the group in [`GROUPS`].
+    Header(usize),
     File(usize),
     Other,
+}
+
+/// What the menu of a heading offers: take the whole group out of the staged changes, or stage
+/// it. (Staging everything stages the files of the other groups too: the menu says so by being
+/// "Stage All".)
+fn group_menu(group: usize) -> Vec<WireMenuItem> {
+    let all = match GROUPS[group].0 {
+        GitSection::Staged => "unstage_all",
+        _ => "stage_all",
+    };
+    vec![WireMenuItem::action(all)]
+}
+
+/// What the menu of the branch offers: the commands to the remote.
+fn remote_menu() -> Vec<WireMenuItem> {
+    vec![
+        WireMenuItem::action("fetch"),
+        WireMenuItem::action("pull"),
+        WireMenuItem::action("push"),
+        WireMenuItem::Separator,
+        WireMenuItem::action("refresh"),
+    ]
 }
 
 #[derive(Debug)]
@@ -158,6 +181,7 @@ impl Plugin for Viewer {
             } => self.page(request, generation, offset, entries),
             ToPlugin::Action { action } => self.action(&action, &mut out),
             ToPlugin::Click { row } => self.click(row, &mut out),
+            ToPlugin::ContextClick { row } => self.context_click(row, &mut out),
             ToPlugin::Press { button } => self.press(&button, &mut out),
             ToPlugin::InputClick { column } => self.click_in_message(column),
             ToPlugin::Text { text } => self.type_text(&text),
@@ -455,6 +479,42 @@ impl Viewer {
         }
     }
 
+    /// A right click on a row: a file is selected, and the menu is what can be done with it; a
+    /// heading offers what can be done with the group, the branch what can be done with the
+    /// remote. What is offered are actions of the manifest, so each has its title and its key.
+    fn context_click(&mut self, row: usize, out: &mut Vec<FromPlugin>) {
+        self.more_open = false;
+        self.problem = None;
+        let items = match self.rows.get(row).copied() {
+            Some(Row::File(file)) => {
+                self.selected = file;
+                self.file_menu()
+            }
+            Some(Row::Header(group)) => group_menu(group),
+            Some(Row::Branch) => remote_menu(),
+            _ => vec![WireMenuItem::action("refresh")],
+        };
+        out.push(FromPlugin::Menu { items });
+    }
+
+    /// What the menu of the selected file offers: open it, and stage or unstage it, as the
+    /// group it is in says. A file whose page has not come has nothing but a refresh.
+    fn file_menu(&self) -> Vec<WireMenuItem> {
+        let Some((group, entry)) = self.selection() else {
+            return vec![WireMenuItem::action("refresh")];
+        };
+        let mut items = Vec::new();
+        if entry.kind != GitKind::Deleted {
+            items.push(WireMenuItem::action("open"));
+            items.push(WireMenuItem::Separator);
+        }
+        items.push(WireMenuItem::action(match GROUPS[group].0 {
+            GitSection::Staged => "unstage",
+            _ => "stage",
+        }));
+        items
+    }
+
     /// The selected file as the group it is in and the file, once it has come.
     fn selection(&self) -> Option<(usize, &GitEntry)> {
         self.file(self.selected)
@@ -703,7 +763,7 @@ impl Viewer {
             if (first..last).contains(&place) {
                 let title = format!("{} ({})", GROUPS[group].1, shown.count);
                 lines.push(plain(&title, HEADER_SLOT));
-                rows.push(Row::Header);
+                rows.push(Row::Header(group));
             }
             place += 1;
             for row in 0..shown.count {
