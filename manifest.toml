@@ -1,7 +1,7 @@
 id = "git"
 name = "Git"
-version = "0.2.2"
-abi = "1.4"
+version = "0.3.0"
+abi = "1.10"
 wasm = "git.wasm"
 capabilities = ["git.read", "git.write", "git.remote", "editor.open"]
 
