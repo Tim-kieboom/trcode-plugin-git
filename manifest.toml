@@ -1,7 +1,7 @@
 id = "git"
 name = "Git"
-version = "0.3.0"
-abi = "1.10"
+version = "0.4.0"
+abi = "1.14"
 wasm = "git.wasm"
 capabilities = ["git.read", "git.write", "git.remote", "editor.open"]
 
@@ -29,6 +29,11 @@ keys = "s"
 id = "unstage"
 title = "Unstage File"
 keys = "u"
+
+[[action]]
+id = "discard"
+title = "Discard Changes"
+keys = "d"
 
 [[action]]
 id = "refresh"

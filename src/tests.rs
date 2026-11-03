@@ -1522,7 +1522,7 @@ fn a_right_click_on_a_changed_file_offers_to_open_and_stage_it_and_selects_it() 
 
     let items = pane.right_click(row);
 
-    assert_eq!(items, ["open", "-", "stage"]);
+    assert_eq!(items, ["open", "-", "stage", "discard"]);
     assert_eq!(
         selected_path(&pane),
         "M c2.rs",
@@ -1543,7 +1543,7 @@ fn a_right_click_on_a_staged_file_offers_to_unstage_it() {
 
     let items = pane.right_click(row);
 
-    assert_eq!(items, ["open", "-", "unstage"]);
+    assert_eq!(items, ["open", "-", "unstage", "discard"]);
     pane.act("unstage");
     assert!(matches!(
         pane.commands()[..],
@@ -1566,7 +1566,7 @@ fn an_untracked_and_a_conflicted_file_are_staged_from_the_menu_too() {
     );
     let row = pane.row_of("new.rs");
 
-    assert_eq!(pane.right_click(row), ["open", "-", "stage"]);
+    assert_eq!(pane.right_click(row), ["open", "-", "stage", "discard"]);
 }
 
 #[test]
@@ -1584,7 +1584,7 @@ fn a_deleted_file_cannot_be_opened_so_the_menu_only_stages_it() {
     );
     let row = pane.row_of("gone.rs");
 
-    assert_eq!(pane.right_click(row), ["stage"]);
+    assert_eq!(pane.right_click(row), ["stage", "discard"]);
 }
 
 #[test]
@@ -1666,4 +1666,119 @@ fn every_action_a_menu_offers_is_one_the_manifest_has_with_a_title() {
             "{action} is not an action of the manifest"
         );
     }
+}
+
+// --- discarding ---
+
+fn discard_request(pane: &Pane) -> (u64, String, GitSection) {
+    match pane.commands().last() {
+        Some(FromPlugin::GitDiscard {
+            request,
+            path,
+            section,
+        }) => (*request, path.clone(), *section),
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn discard_asks_the_editor_to_throw_the_changes_of_the_file_in_its_section_away() {
+    let mut pane = staged_and_changed();
+    let row = pane.row_of("s2.rs");
+    pane.right_click(row);
+
+    pane.act("discard");
+
+    let (_, path, section) = discard_request(&pane);
+    assert_eq!((path.as_str(), section), ("s2.rs", GitSection::Staged));
+    let row = pane.row_of("c1.rs");
+    pane.right_click(row);
+    pane.act("discard");
+    let (_, path, section) = discard_request(&pane);
+    assert_eq!((path.as_str(), section), ("c1.rs", GitSection::Changes));
+}
+
+#[test]
+fn a_right_click_menu_discard_is_the_same_action() {
+    let mut pane = staged_and_changed();
+    let row = pane.row_of("c2.rs");
+
+    assert!(pane.right_click(row).contains(&"discard".to_owned()));
+    pane.act("discard");
+
+    assert!(matches!(
+        pane.commands()[..],
+        [FromPlugin::GitDiscard { path, .. }] if path == "c2.rs"
+    ));
+}
+
+#[test]
+fn an_untracked_file_is_discarded_as_untracked() {
+    let mut pane = Pane::new();
+    pane.changed(summary(1, 0, 0, 1));
+    let request = pane.pages_asked()[0].2;
+    pane.answer(
+        request,
+        1,
+        GitSection::Untracked,
+        0,
+        1,
+        vec![GitEntry::new("new.rs", GitKind::Untracked)],
+    );
+
+    pane.act("discard");
+
+    assert_eq!(discard_request(&pane).2, GitSection::Untracked);
+}
+
+#[test]
+fn a_file_with_a_conflict_is_not_discarded_and_the_pane_says_why() {
+    let mut pane = Pane::new();
+    let mut conflicts = summary(1, 0, 0, 0);
+    conflicts.conflicts = 1;
+    pane.changed(conflicts);
+    let request = pane.pages_asked()[0].2;
+    pane.answer(
+        request,
+        1,
+        GitSection::Conflicts,
+        0,
+        1,
+        vec![GitEntry::new("both.rs", GitKind::Conflicted)],
+    );
+    let row = pane.row_of("both.rs");
+
+    assert_eq!(pane.right_click(row), ["open", "-", "stage"]);
+    pane.act("discard");
+
+    assert!(pane.commands().is_empty());
+    assert!(pane.rows.last().unwrap().contains("conflict"));
+}
+
+#[test]
+fn nothing_selected_discards_nothing() {
+    let mut pane = Pane::new();
+    pane.changed(summary(1, 0, 0, 0));
+
+    pane.act("discard");
+
+    assert!(pane.commands().is_empty());
+}
+
+#[test]
+fn a_no_from_the_user_is_not_a_failure_and_a_yes_leaves_nothing_to_say() {
+    let mut pane = with_changes(&["a.rs"]);
+    pane.act("discard");
+    let (request, ..) = discard_request(&pane);
+
+    pane.hear(ToPlugin::Refused {
+        request,
+        reason: Refusal::Cancelled,
+    });
+
+    assert_eq!(pane.rows.last().unwrap(), "not discarded");
+    pane.act("discard");
+    let (request, ..) = discard_request(&pane);
+    pane.hear(ToPlugin::Done { request });
+    assert_ne!(pane.rows.last().unwrap(), "not discarded");
 }

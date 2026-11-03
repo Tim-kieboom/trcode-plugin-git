@@ -51,6 +51,8 @@ enum Asked {
     },
     /// A change or an opening: nothing to do with the answer but tell what went wrong.
     Command,
+    /// Throwing a file's changes away: a no from the user is not a failure.
+    Discard,
     /// The commit: when it is done the message is cleared.
     Commit,
     /// A fetch, pull or push: when it ends the buttons come back.
@@ -273,6 +275,10 @@ impl Viewer {
         if matches!(asked, Some(Asked::Remote)) {
             self.running = None;
         }
+        if matches!(asked, Some(Asked::Discard)) && matches!(reason, Refusal::Cancelled) {
+            self.problem = Some("not discarded".to_owned());
+            return;
+        }
         self.problem = Some(match reason {
             Refusal::Denied { capability } => {
                 format!("not allowed: {}", capability_name(*capability))
@@ -297,6 +303,7 @@ impl Viewer {
             "open" => self.open_selected(out),
             "stage" => self.change_selected(out, true),
             "unstage" => self.change_selected(out, false),
+            "discard" => self.discard_selected(out),
             "stage_all" => self.stage_all(out),
             "unstage_all" => self.unstage_all(out),
             "commit" => self.start_commit(),
@@ -497,8 +504,8 @@ impl Viewer {
         out.push(FromPlugin::Menu { items });
     }
 
-    /// What the menu of the selected file offers: open it, and stage or unstage it, as the
-    /// group it is in says. A file whose page has not come has nothing but a refresh.
+    /// What the menu of the selected file offers: open it, stage or unstage it as the group it is
+    /// in says, and discard its changes. A file whose page has not come has nothing but a refresh.
     fn file_menu(&self) -> Vec<WireMenuItem> {
         let Some((group, entry)) = self.selection() else {
             return vec![WireMenuItem::action("refresh")];
@@ -512,6 +519,9 @@ impl Viewer {
             GitSection::Staged => "unstage",
             _ => "stage",
         }));
+        if GROUPS[group].0 != GitSection::Conflicts {
+            items.push(WireMenuItem::action("discard"));
+        }
         items
     }
 
@@ -554,7 +564,12 @@ impl Viewer {
         }
         let path = entry.path.clone();
         let request = self.send(Asked::Command);
-        out.push(FromPlugin::OpenFile { request, path });
+        out.push(FromPlugin::OpenFile {
+            request,
+            path,
+            line: None,
+            column: None,
+        });
     }
 
     /// Stages (`stage`) or unstages the selected file, when it is in a group where
@@ -577,6 +592,27 @@ impl Viewer {
             (true, _) => self.problem = Some("already staged".to_owned()),
             (false, _) => self.problem = Some("not staged".to_owned()),
         }
+    }
+
+    /// Asks the editor to throw away the changes to the selected file; the editor asks the user
+    /// first, and the answer comes when they have said. A file with a conflict is resolved, not
+    /// thrown away.
+    fn discard_selected(&mut self, out: &mut Vec<FromPlugin>) {
+        let Some((group, entry)) = self.selection() else {
+            return;
+        };
+        let section = GROUPS[group].0;
+        if section == GitSection::Conflicts {
+            self.problem = Some("a conflict is resolved in the file, not discarded".to_owned());
+            return;
+        }
+        let path = entry.path.clone();
+        let request = self.send(Asked::Discard);
+        out.push(FromPlugin::GitDiscard {
+            request,
+            path,
+            section,
+        });
     }
 
     fn send(&mut self, asked: Asked) -> u64 {
