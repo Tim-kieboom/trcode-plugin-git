@@ -412,6 +412,56 @@ fn open_asks_the_editor_to_open_the_selected_file() {
 }
 
 #[test]
+fn diff_asks_the_editor_for_the_diff_of_the_selected_file() {
+    let mut pane = with_changes(&["src/a.rs", "b.rs"]);
+    pane.act("down");
+
+    pane.act("diff");
+
+    assert!(matches!(
+        pane.commands()[..],
+        [FromPlugin::OpenDiff { path, .. }] if path == "b.rs"
+    ));
+}
+
+#[test]
+fn a_deleted_file_has_a_diff_and_a_folder_of_untracked_files_has_none() {
+    let mut pane = Pane::new();
+    pane.changed(summary(1, 0, 1, 1));
+    let asked = pane.pages_asked();
+    pane.answer(
+        asked[0].2,
+        1,
+        GitSection::Changes,
+        0,
+        1,
+        vec![GitEntry::new("gone.rs", GitKind::Deleted)],
+    );
+    pane.answer(
+        asked[1].2,
+        1,
+        GitSection::Untracked,
+        0,
+        1,
+        vec![GitEntry::new("build/", GitKind::Untracked)],
+    );
+
+    pane.act("diff");
+    assert!(matches!(
+        pane.commands()[..],
+        [FromPlugin::OpenDiff { path, .. }] if path == "gone.rs"
+    ));
+
+    pane.act("down");
+    pane.act("diff");
+    assert!(pane.commands().is_empty());
+    assert_eq!(
+        pane.rows.last().unwrap(),
+        "nothing to compare: a folder of untracked files"
+    );
+}
+
+#[test]
 fn a_deleted_file_and_a_folder_of_untracked_files_cannot_be_opened_and_it_says_why() {
     let mut pane = Pane::new();
     pane.changed(summary(1, 0, 1, 1));
@@ -509,21 +559,21 @@ fn commands_with_nothing_selected_do_nothing() {
     let mut pane = Pane::new();
     pane.changed(summary(1, 0, 0, 0));
 
-    for action in ["open", "stage", "unstage", "up", "down"] {
+    for action in ["open", "diff", "stage", "unstage", "up", "down"] {
         pane.act(action);
         assert!(pane.commands().is_empty(), "{action}");
     }
 }
 
 #[test]
-fn a_click_on_a_file_selects_and_opens_it_and_a_click_elsewhere_does_nothing() {
+fn a_click_on_a_file_selects_it_and_opens_its_diff_and_a_click_elsewhere_does_nothing() {
     let mut pane = with_changes(&["a.rs", "b.rs"]);
 
     pane.hear(ToPlugin::Click { row: 3 });
     assert_eq!(pane.selected, Some(3));
     assert!(matches!(
         pane.commands()[..],
-        [FromPlugin::OpenFile { path, .. }] if path == "b.rs"
+        [FromPlugin::OpenDiff { path, .. }] if path == "b.rs"
     ));
 
     for row in [0, 1, 99] {
@@ -1522,7 +1572,7 @@ fn a_right_click_on_a_changed_file_offers_to_open_and_stage_it_and_selects_it() 
 
     let items = pane.right_click(row);
 
-    assert_eq!(items, ["open", "-", "stage", "discard"]);
+    assert_eq!(items, ["diff", "open", "-", "stage", "discard"]);
     assert_eq!(
         selected_path(&pane),
         "M c2.rs",
@@ -1543,7 +1593,7 @@ fn a_right_click_on_a_staged_file_offers_to_unstage_it() {
 
     let items = pane.right_click(row);
 
-    assert_eq!(items, ["open", "-", "unstage", "discard"]);
+    assert_eq!(items, ["diff", "open", "-", "unstage", "discard"]);
     pane.act("unstage");
     assert!(matches!(
         pane.commands()[..],
@@ -1566,11 +1616,14 @@ fn an_untracked_and_a_conflicted_file_are_staged_from_the_menu_too() {
     );
     let row = pane.row_of("new.rs");
 
-    assert_eq!(pane.right_click(row), ["open", "-", "stage", "discard"]);
+    assert_eq!(
+        pane.right_click(row),
+        ["diff", "open", "-", "stage", "discard"]
+    );
 }
 
 #[test]
-fn a_deleted_file_cannot_be_opened_so_the_menu_only_stages_it() {
+fn a_deleted_file_cannot_be_opened_so_the_menu_offers_its_diff_and_staging() {
     let mut pane = Pane::new();
     pane.changed(summary(1, 0, 1, 0));
     let request = pane.pages_asked()[0].2;
@@ -1584,7 +1637,7 @@ fn a_deleted_file_cannot_be_opened_so_the_menu_only_stages_it() {
     );
     let row = pane.row_of("gone.rs");
 
-    assert_eq!(pane.right_click(row), ["stage", "discard"]);
+    assert_eq!(pane.right_click(row), ["diff", "-", "stage", "discard"]);
 }
 
 #[test]
@@ -1748,7 +1801,7 @@ fn a_file_with_a_conflict_is_not_discarded_and_the_pane_says_why() {
     );
     let row = pane.row_of("both.rs");
 
-    assert_eq!(pane.right_click(row), ["open", "-", "stage"]);
+    assert_eq!(pane.right_click(row), ["diff", "open", "-", "stage"]);
     pane.act("discard");
 
     assert!(pane.commands().is_empty());

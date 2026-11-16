@@ -40,7 +40,7 @@ choosing one of them does it and closes the row (so does a click on a file):
 | Push (n) | pushes the branch; a branch with no upstream is pushed with `-u` when the repository has one remote. `n` is how many commits you are ahead | `shift+p` |
 | Cancel | stops the fetch, pull or push that is running (also `esc`) | `esc` |
 
-A **right click** on a row opens a menu, like the editor's: on a file, Open File, Stage File (Unstage File for a staged one) and Discard Changes (each shows its key), on a heading Stage All or Unstage All, on the branch Fetch, Pull and Push. The file you clicked is the selected one, so the keys `s` and `u` then work on it. Discard Changes (`d`) asks the editor to throw the changes away: the editor asks you first with a yes/no question, and only `y` says yes. In *Changes* the file goes back to what is staged, in *Staged Changes* back to the last commit (an added file is deleted), and an *Untracked* file or folder is deleted. Nothing can bring it back. This needs plugin API 1.14 (TerminalCode 0.13.0 or later), so an older editor stays with version 0.3.0 of this plugin.
+A **right click** on a row opens a menu, like the editor's: on a file, Open Diff, Open File, Stage File (Unstage File for a staged one) and Discard Changes (each shows its key), on a heading Stage All or Unstage All, on the branch Fetch, Pull and Push. The file you clicked is the selected one, so the keys `s` and `u` then work on it. Discard Changes (`d`) asks the editor to throw the changes away: the editor asks you first with a yes/no question, and only `y` says yes. In *Changes* the file goes back to what is staged, in *Staged Changes* back to the last commit (an added file is deleted), and an *Untracked* file or folder is deleted. Nothing can bring it back. This needs plugin API 1.14 (TerminalCode 0.13.0 or later), so an older editor stays with version 0.3.0 of this plugin.
 
 Only what can be done now can be pressed: Commit needs something staged, Pull an
 upstream, Push a commit to push (or a branch with no upstream yet). A fetch, pull or
@@ -57,7 +57,8 @@ you dismiss it.
 | Key | Action |
 | --- | --- |
 | `up`, `down` | move over the files |
-| `enter`, a click | open the file in the editor |
+| `enter`, a click | open the file as a diff against `HEAD`: a tab with the file as committed on the left and the file itself on the right, which you edit as usual (a deleted file shows what it was; a folder of untracked files has no diff). This needs plugin API 1.15 (TerminalCode 0.13.0 or later) |
+| `o` | open the file in the editor as a plain tab (it was `enter` before 0.5.0) |
 | `s` | stage the file (also an untracked one) |
 | `u` | unstage the file |
 | `d` | discard the changes to the file (the editor asks first; it cannot be undone) |

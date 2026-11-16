@@ -1,7 +1,7 @@
 id = "git"
 name = "Git"
-version = "0.4.0"
-abi = "1.14"
+version = "0.5.0"
+abi = "1.15"
 wasm = "git.wasm"
 capabilities = ["git.read", "git.write", "git.remote", "editor.open"]
 
@@ -16,9 +16,14 @@ title = "Next File"
 keys = "down"
 
 [[action]]
+id = "diff"
+title = "Open Diff"
+keys = "enter"
+
+[[action]]
 id = "open"
 title = "Open File"
-keys = "enter"
+keys = "o"
 
 [[action]]
 id = "stage"

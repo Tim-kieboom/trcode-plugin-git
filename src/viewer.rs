@@ -301,6 +301,7 @@ impl Viewer {
             "up" => self.selected = self.selected.saturating_sub(1),
             "down" => self.selected = (self.selected + 1).min(self.total().saturating_sub(1)),
             "open" => self.open_selected(out),
+            "diff" => self.diff_selected(out),
             "stage" => self.change_selected(out, true),
             "unstage" => self.change_selected(out, false),
             "discard" => self.discard_selected(out),
@@ -482,7 +483,7 @@ impl Viewer {
         if let Some(Row::File(file)) = self.rows.get(row).copied() {
             self.selected = file;
             self.problem = None;
-            self.open_selected(out);
+            self.diff_selected(out);
         }
     }
 
@@ -511,10 +512,11 @@ impl Viewer {
             return vec![WireMenuItem::action("refresh")];
         };
         let mut items = Vec::new();
+        items.push(WireMenuItem::action("diff"));
         if entry.kind != GitKind::Deleted {
             items.push(WireMenuItem::action("open"));
-            items.push(WireMenuItem::Separator);
         }
+        items.push(WireMenuItem::Separator);
         items.push(WireMenuItem::action(match GROUPS[group].0 {
             GitSection::Staged => "unstage",
             _ => "stage",
@@ -570,6 +572,22 @@ impl Viewer {
             line: None,
             column: None,
         });
+    }
+
+    /// Asks the editor to show the selected file as a diff against `HEAD` (what a click and
+    /// `enter` do). A deleted file has one too (its text is the left side); a folder of
+    /// untracked files has nothing to compare.
+    fn diff_selected(&mut self, out: &mut Vec<FromPlugin>) {
+        let Some((_, entry)) = self.selection() else {
+            return;
+        };
+        if entry.path.ends_with('/') {
+            self.problem = Some("nothing to compare: a folder of untracked files".to_owned());
+            return;
+        }
+        let path = entry.path.clone();
+        let request = self.send(Asked::Command);
+        out.push(FromPlugin::OpenDiff { request, path });
     }
 
     /// Stages (`stage`) or unstages the selected file, when it is in a group where
